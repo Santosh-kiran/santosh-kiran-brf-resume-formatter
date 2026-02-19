@@ -1,27 +1,13 @@
 import streamlit as st
-from openai import OpenAI
 from docx import Document
 from docx.shared import Pt
 import docx2txt
 import PyPDF2
 from io import BytesIO
+import re
 
-# ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="BRF Resume Formatter", page_icon="📄")
-
-st.title("BRFv1.0 Resume Formatter")
-
-# ---------------- CHECK OPENAI KEY ----------------
-if "OPENAI_API_KEY" not in st.secrets:
-    st.error("OPENAI_API_KEY not found in Streamlit Secrets.")
-    st.stop()
-
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-
-# ---------------- BRF MASTER PROMPT ----------------
-BRF_PROMPT = """
-PASTE YOUR COMPLETE BRFv1.0 MASTER PROMPT HERE EXACTLY
-"""
+st.title("BRFv1.0 Resume Formatter (No API Version)")
 
 # ---------------- EXTRACT TEXT ----------------
 def extract_text(uploaded_file):
@@ -32,7 +18,7 @@ def extract_text(uploaded_file):
             for page in pdf_reader.pages:
                 page_text = page.extract_text()
                 if page_text:
-                    text += page_text
+                    text += page_text + "\n"
             return text
 
         elif uploaded_file.name.endswith(".docx"):
@@ -43,9 +29,16 @@ def extract_text(uploaded_file):
 
         else:
             return ""
-    except Exception as e:
-        st.error(f"File extraction error: {e}")
+    except:
         return ""
+
+# ---------------- REMOVE BULLETS ----------------
+def remove_bullets(text):
+    cleaned_lines = []
+    for line in text.split("\n"):
+        line = re.sub(r"^[\-\•\●\▪\*]+\s*", "", line.strip())
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
 
 # ---------------- GET CANDIDATE NAME ----------------
 def get_candidate_name(text):
@@ -84,29 +77,16 @@ if uploaded_file:
     resume_text = extract_text(uploaded_file)
 
     if not resume_text.strip():
-        st.error("Could not extract text from the uploaded file.")
+        st.error("Could not extract text from file.")
         st.stop()
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": BRF_PROMPT},
-                {"role": "user", "content": resume_text}
-            ],
-            temperature=0
-        )
-
-        formatted_text = response.choices[0].message.content
-
-    except Exception as e:
-        st.error(f"OpenAI Error: {e}")
-        st.stop()
+    # Remove bullets (BRF rule)
+    formatted_text = remove_bullets(resume_text)
 
     candidate_name = get_candidate_name(formatted_text)
     doc_file = generate_docx(formatted_text)
 
-    st.success("Formatting Completed Successfully!")
+    st.success("Resume Processed Successfully!")
 
     st.download_button(
         label="Download Formatted Resume",
