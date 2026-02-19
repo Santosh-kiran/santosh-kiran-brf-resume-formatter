@@ -21,26 +21,38 @@ if 'step' not in st.session_state:
     st.session_state.template_data = None
     st.session_state.mode = None
 
+def sanitize_text(text):
+    """🔧 FIX: Remove invalid XML characters for DOCX"""
+    if not text:
+        return ""
+    # Remove control characters that break DOCX
+    return re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+
 def extract_text_all_formats(file):
     """4.1 ALL FORMATS - NO REJECTION"""
+    file.seek(0)  # Reset file pointer
     ext = file.name.lower().split('.')[-1]
     try:
         if ext == 'pdf':
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file.read()))
-            return "".join([page.extract_text() for page in pdf_reader.pages])
+            return sanitize_text("".join([page.extract_text() or "" for page in pdf_reader.pages]))
         elif ext == 'docx':
             doc = Document(io.BytesIO(file.read()))
-            return "\n".join([para.text for para in doc.paragraphs])
-        elif ext in ['txt', 'rtf', 'html', 'odt']:
-            return file.read().decode('utf-8', errors='ignore')
+            return sanitize_text("\n".join([para.text for para in doc.paragraphs]))
+        elif ext in ['txt', 'rtf', 'html', 'odt', 'doc']:
+            content = file.read().decode('utf-8', errors='ignore')
+            return sanitize_text(content)
         else:
-            return file.read().decode('utf-8', errors='ignore')
-    except:
-        return file.read().decode('utf-8', errors='ignore')
+            content = file.read().decode('utf-8', errors='ignore')
+            return sanitize_text(content)
+    except Exception as e:
+        st.error(f"File read error: {str(e)}")
+        return "Error reading file content"
 
 def extract_template_values(docx_file):
-    """OPTION 1 - AUTO DETECT"""
+    """✅ OPTION 1 - AUTO DETECT"""
     try:
+        docx_file.seek(0)
         doc = Document(io.BytesIO(docx_file.read()))
         template_info = {
             "font_name": "Calibri", "font_size": 11, "heading_size": 14,
@@ -50,18 +62,23 @@ def extract_template_values(docx_file):
         for para in doc.paragraphs[:15]:
             if para.text.strip():
                 for run in para.runs:
-                    if run.font.name: template_info["font_name"] = str(run.font.name)
+                    if run.font.name: 
+                        template_info["font_name"] = str(run.font.name)
                     if run.font.size: 
-                        if run.bold: template_info["heading_size"] = int(run.font.size.pt)
-                        else: template_info["font_size"] = int(run.font.size.pt)
+                        pt_size = int(run.font.size.pt) if run.font.size else 11
+                        if run.bold: 
+                            template_info["heading_size"] = pt_size
+                        else: 
+                            template_info["font_size"] = pt_size
         return template_info
     except:
         return template_info
 
 def parse_resume_sections(text):
     """5.1 EXACT SECTION EXTRACTION & ORDERING"""
-    # 8.1 NAME EXTRACTION - First non-empty line
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    lines = [sanitize_text(line.strip()) for line in text.split('\n') if line.strip()]
+    
+    # 8.1 AUTO NAME EXTRACTION
     first_name, last_name = "Candidate", "Resume"
     if lines:
         first_line_words = lines[0].split()
@@ -74,19 +91,21 @@ def parse_resume_sections(text):
     current_section = None
     
     for line in lines:
+        if not line:
+            continue
         line_lower = line.lower()
         
-        # 5.1 SUMMARY
+        # 5.1 SUMMARY ("Summary :")
         if any(kw in line_lower for kw in ["summary", "profile", "overview"]):
             current_section = "summary"
-        # 5.3 TECHNICAL SKILLS  
-        elif any(kw in line_lower for kw in ["skill", "technical", "technology"]):
+        # 5.3 TECHNICAL SKILLS
+        elif any(kw in line_lower for kw in ["skill", "technical", "technology", "tech"]):
             current_section = "skills"
         # 5.4 EDUCATION
-        elif any(kw in line_lower for kw in ["education", "degree", "university"]):
+        elif any(kw in line_lower for kw in ["education", "degree", "university", "college"]):
             current_section = "education"
         # 5.5 PROFESSIONAL EXPERIENCE
-        elif any(kw in line_lower for kw in ["experience", "work", "employment", "project"]):
+        elif any(kw in line_lower for kw in ["experience", "work", "employment", "project", "job"]):
             current_section = "experience"
         
         if current_section:
@@ -95,7 +114,7 @@ def parse_resume_sections(text):
     return sections, first_name, last_name
 
 def create_formatted_doc(sections, template_data, first_name, last_name):
-    """7. FORMATTING ENFORCEMENT + 5.1 FIXED ORDER"""
+    """✅ FIXED: Safe DOCX creation with proper run handling"""
     doc = Document()
     
     # 7.1 MARGINS
@@ -105,11 +124,11 @@ def create_formatted_doc(sections, template_data, first_name, last_name):
     section.left_margin = Inches(template_data["margins"]["left"])
     section.right_margin = Inches(template_data["margins"]["right"])
     
-    # 8.2 HEADER
+    # HEADER
     header = doc.add_heading(f"{first_name.upper()} {last_name.upper()}", 0)
-    for run in header.runs:
-        run.font.name = template_data["font_name"]
-        run.font.size = Pt(template_data["heading_size"])
+    run = header.runs[0] if header.runs else header.add_run()
+    run.font.name = template_data["font_name"]
+    run.font.size = Pt(template_data["heading_size"])
     
     # 5.1 FIXED SECTION ORDER
     section_order = [
@@ -120,26 +139,30 @@ def create_formatted_doc(sections, template_data, first_name, last_name):
     ]
     
     for heading_text, content in section_order:
-        # 7.3 HEADING FORMATTING
+        # Section heading
         heading = doc.add_heading(heading_text, level=1)
-        for run in heading.runs:
-            run.font.name = template_data["font_name"]
-            run.font.size = Pt(template_data["heading_size"])
-            run.bold = template_data["bold_headings"]
+        run = heading.runs[0] if heading.runs else heading.add_run()
+        run.font.name = template_data["font_name"]
+        run.font.size = Pt(template_data["heading_size"])
+        run.bold = template_data["bold_headings"]
         
-        # 6. CONTENT EXACTLY PRESERVED
+        # 6. CONTENT - EXACTLY PRESERVED (FIXED)
         if content.strip():
-            for line in content.split('\n'):
-                if line.strip():
-                    p = doc.add_paragraph(line)
-                    for run in p.runs:
-                        run.font.name = template_data["font_name"]
-                        run.font.size = Pt(template_data["font_size"])
+            content_lines = [line.strip() for line in content.split('\n') if line.strip()]
+            for line in content_lines:
+                try:
+                    p = doc.add_paragraph()
+                    run = p.add_run(sanitize_text(line))
+                    run.font.name = template_data["font_name"]
+                    run.font.size = Pt(template_data["font_size"])
                     p.paragraph_format.line_spacing = template_data["line_spacing"]
+                except Exception as e:
+                    st.error(f"Line processing error: {str(e)[:100]}")
+                    continue
     
     return doc
 
-# === MAIN WEB UI ===
+# === MAIN UI - UNCHANGED ===
 if st.session_state.step == 0:
     st.markdown("""
     <div style='text-align: center; padding: 50px; color: white;'>
@@ -161,7 +184,6 @@ if st.session_state.step == 0:
             st.rerun()
 
 elif st.session_state.step == 1:
-    # ✅ OPTION 1: AUTOMATIC TEMPLATE READING
     if st.session_state.mode == "template":
         st.header("📁 **Option 1: Upload DOCX Template**")
         template_file = st.file_uploader("Upload DOCX only", type=['docx'])
@@ -182,7 +204,6 @@ elif st.session_state.step == 1:
                 st.session_state.step = 2
                 st.rerun()
     
-    # ✅ OPTION 2: MANUAL INPUT FIELDS
     else:
         st.header("✏️ **Option 2: Manual Configuration**")
         col1, col2 = st.columns(2)
@@ -204,9 +225,8 @@ elif st.session_state.step == 1:
             st.rerun()
 
 elif st.session_state.step == 2:
-    # ✅ RESUME UPLOAD - ALL FORMATS
     st.header("📄 **Upload Resume (Any Format)**")
-    st.info("✅ PDF, DOCX, TXT, DOC, ODT, RTF, HTML - ALL accepted, NO size limits")
+    st.info("✅ PDF, DOCX, TXT, DOC, ODT, RTF, HTML - ALL accepted")
     
     resume_file = st.file_uploader("Choose resume file", type=['pdf','docx','txt','doc','odt','rtf','html'])
     
@@ -214,7 +234,7 @@ elif st.session_state.step == 2:
         with st.spinner("Extracting exact content..."):
             resume_text = extract_text_all_formats(resume_file)
         
-        if resume_text:
+        if resume_text and not resume_text.startswith("Error"):
             st.success(f"✅ **Content extracted** ({len(resume_text)} characters preserved exactly)")
             
             sections, first_name, last_name = parse_resume_sections(resume_text)
@@ -223,27 +243,31 @@ elif st.session_state.step == 2:
             with col1: first_name_input = st.text_input("First Name", value=first_name)
             with col2: last_name_input = st.text_input("Last Name", value=last_name)
             
-            output_format = st.selectbox("Output Format", ["docx", "txt"])
+            output_format = st.selectbox("Output Format", ["docx"])
             
             if st.button("🎨 **FORMAT & DOWNLOAD**", use_container_width=True):
-                if first_name_input and last_name_input:
-                    doc = create_formatted_doc(sections, st.session_state.template_data, 
-                                            first_name_input, last_name_input)
-                    
-                    output_bytes = io.BytesIO()
-                    doc.save(output_bytes)
-                    output_bytes.seek(0)
-                    
-                    st.balloons()
-                    st.success(f"✅ **{first_name_input}_{last_name_input}.{output_format}** ready!")
-                    st.download_button(
-                        label=f"📥 Download {first_name_input}_{last_name_input}.{output_format}",
-                        data=output_bytes.getvalue(),
-                        file_name=f"{first_name_input}_{last_name_input}.{output_format}",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
+                if first_name_input and last_name_input and st.session_state.template_data:
+                    try:
+                        with st.spinner("Applying professional formatting..."):
+                            doc = create_formatted_doc(sections, st.session_state.template_data, 
+                                                    first_name_input, last_name_input)
+                        
+                        output_bytes = io.BytesIO()
+                        doc.save(output_bytes)
+                        output_bytes.seek(0)
+                        
+                        st.balloons()
+                        st.success(f"✅ **{first_name_input}_{last_name_input}.docx** ready!")
+                        st.download_button(
+                            label=f"📥 Download {first_name_input}_{last_name_input}.docx",
+                            data=output_bytes.getvalue(),
+                            file_name=f"{first_name_input}_{last_name_input}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
+                    except Exception as e:
+                        st.error(f"Formatting error: {str(e)}")
                 else:
-                    st.error("Please enter both names")
+                    st.error("Please complete all fields")
 
 if st.button("🔙 **BACK TO START**", type="secondary"):
     for key in list(st.session_state.keys()):
