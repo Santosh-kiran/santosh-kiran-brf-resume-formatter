@@ -1,19 +1,61 @@
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+import numpy as np
 
-st.set_page_config(page_title="My App", layout="wide")
+st.set_page_config(page_title="My Web App", layout="wide")
 
-st.title("🎉 My Streamlit Web App")
+# Title
+st.title("🚀 My First Streamlit Web App")
 st.markdown("---")
 
-col1, col2 = st.columns(2)
+# Sidebar
+st.sidebar.header("📊 Controls")
+chart_type = st.sidebar.selectbox("Chart Type", ["Line", "Bar", "Scatter"])
+show_data = st.sidebar.checkbox("Show Raw Data")
 
-with col1:
-    st.header("📊 Dashboard")
-    st.metric("Visitors", "1,234")
-    st.metric("Revenue", "$12,345")
+# Main content tabs
+tab1, tab2 = st.tabs(["📈 Dashboard", "ℹ️ About"])
 
-with col2:
-    st.header("📈 Chart")
-    st.bar_chart({"Jan": 100, "Feb": 150, "Mar": 200})
+with tab1:
+    # Sample data
+    df = pd.DataFrame({
+        'Month': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+        'Sales': [100, 120, 150, 130, 180, 200],
+        'Profit': [20, 25, 35, 28, 40, 45]
+    })
+    
+    # Metrics
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Sales", f"${df['Sales'].sum():,}")
+    col2.metric("Total Profit", f"${df['Profit'].sum():,}")
+    col3.metric("Avg Profit %", f"{df['Profit'].mean():.1f}%")
+    
+    # Chart
+    if chart_type == "Line":
+        fig = px.line(df, x='Month', y='Sales', title="Sales Trend")
+    elif chart_type == "Bar":
+        fig = px.bar(df, x='Month', y='Sales', title="Sales by Month")
+    else:
+        fig = px.scatter(df, x='Sales', y='Profit', title="Sales vs Profit")
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    if show_data:
+        st.subheader("Raw Data")
+        st.dataframe(df)
 
-st.markdown("**Deployed on Streamlit Cloud!** 🚀")
+with tab2:
+    st.header("About This App")
+    st.write("""
+    - Built with **Streamlit** 
+    - Deployed on **Streamlit Cloud**
+    - Hosted on **GitHub**
+    - Fully responsive dashboard
+    """)
+    
+    st.balloons()
+
+# Footer
+st.markdown("---")
+st.markdown("⭐ **Made with ❤️ using Streamlit**")
