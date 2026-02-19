@@ -1,27 +1,116 @@
 import streamlit as st
+from openai import OpenAI
+from docx import Document
+from docx.shared import Pt
+import docx2txt
+import PyPDF2
+from io import BytesIO
 
-st.set_page_config(page_title="BRF Resume Formatter", layout="wide")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(page_title="BRF Resume Formatter", page_icon="📄")
 
-st.title("📄 Beeline Resume Format v1.0")
-st.markdown("---")
+st.title("BRFv1.0 Resume Formatter")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload Resume (PDF/DOCX/TXT)", 
-                                type=['pdf','docx','txt'])
+# ---------------- CHECK OPENAI KEY ----------------
+if "OPENAI_API_KEY" not in st.secrets:
+    st.error("OPENAI_API_KEY not found in Streamlit Secrets.")
+    st.stop()
 
-if uploaded_file is not None:
-    st.success("✅ File uploaded!")
-    st.info(f"📁 Filename: {uploaded_file.name}")
-    st.info(f"📏 Size: {uploaded_file.size:,} bytes")
-    
-    if st.button("✨ Format to BRF v1.0", type="primary"):
-        st.success("🎉 Resume formatted successfully!")
-        st.balloons()
-        st.download_button(
-            label="📥 Download BRF Resume",
-            data="Formatted resume content here",
-            file_name="BRF_Resume.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+# ---------------- BRF MASTER PROMPT ----------------
+BRF_PROMPT = """
+PASTE YOUR COMPLETE BRFv1.0 MASTER PROMPT HERE EXACTLY
+"""
+
+# ---------------- EXTRACT TEXT ----------------
+def extract_text(uploaded_file):
+    try:
+        if uploaded_file.name.endswith(".pdf"):
+            pdf_reader = PyPDF2.PdfReader(uploaded_file)
+            text = ""
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text
+            return text
+
+        elif uploaded_file.name.endswith(".docx"):
+            return docx2txt.process(uploaded_file)
+
+        elif uploaded_file.name.endswith(".txt"):
+            return uploaded_file.read().decode("utf-8")
+
+        else:
+            return ""
+    except Exception as e:
+        st.error(f"File extraction error: {e}")
+        return ""
+
+# ---------------- GET CANDIDATE NAME ----------------
+def get_candidate_name(text):
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if len(lines) > 0:
+        words = lines[0].split()
+        if len(words) >= 2:
+            return words[0] + " " + words[1]
+    return "Formatted Resume"
+
+# ---------------- GENERATE DOCX ----------------
+def generate_docx(content):
+    doc = Document()
+    style = doc.styles["Normal"]
+    font = style.font
+    font.name = "Times New Roman"
+    font.size = Pt(10)
+
+    for line in content.split("\n"):
+        doc.add_paragraph(line)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+# ---------------- UI ----------------
+uploaded_file = st.file_uploader(
+    "Upload Resume (PDF, DOCX, TXT)",
+    type=["pdf", "docx", "txt"]
+)
+
+if uploaded_file:
+    st.info("Processing resume...")
+
+    resume_text = extract_text(uploaded_file)
+
+    if not resume_text.strip():
+        st.error("Could not extract text from the uploaded file.")
+        st.stop()
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": BRF_PROMPT},
+                {"role": "user", "content": resume_text}
+            ],
+            temperature=0
         )
-else:
-    st.info("👆 Please upload your resume to continue")
+
+        formatted_text = response.choices[0].message.content
+
+    except Exception as e:
+        st.error(f"OpenAI Error: {e}")
+        st.stop()
+
+    candidate_name = get_candidate_name(formatted_text)
+    doc_file = generate_docx(formatted_text)
+
+    st.success("Formatting Completed Successfully!")
+
+    st.download_button(
+        label="Download Formatted Resume",
+        data=doc_file,
+        file_name=f"{candidate_name}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
